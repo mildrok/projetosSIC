@@ -51,13 +51,12 @@ function detectarDivergencias(p){
   return ds;
 }
 
-// Parsing simples de captures
+// ====== parsing simples para extração automática a partir de texto ======
 const KW_PASSOS = ["gravar","entregar","enviar","aprovar","confirmar","agendar","editar","validar","contactar","rever","fechar"];
 const RE_ISO = /\b(20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b/g;
 const RE_DMY = /\b(0?[1-9]|[12]\d|3[01])[\/-](0?[1-9]|1[0-2])[\/-](20\d{2})\b/g;
 function extrairDatas(texto){
-  const out=[];
-  const push=(d,lab)=>out.push({id:uid(), data:d, etiqueta:lab||"Data", status:"PREVISTA"});
+  const out=[]; const push=(d,lab)=>out.push({id:uid(), data:d, etiqueta:lab||"Data", status:"PREVISTA"});
   texto.replace(RE_ISO, m=>{ push(m, ctx(texto,m)); return m; });
   texto.replace(RE_DMY, m=>{ const [d,mo,y]=m.split(/[\/-]/); const dd=(d+'').padStart(2,'0'); const mm=(mo+'').padStart(2,'0'); push(`${y}-${mm}-${dd}`, ctx(texto,m)); return m; });
   return out;
@@ -72,10 +71,11 @@ function ctx(txt, m){
 }
 function extrairTags(t){ const r=/#([\p{L}\d_-]+)/gu; const set=new Set(); let m; while((m=r.exec(t))) set.add(m[1]); return [...set]; }
 function extrairResp(t){ const r=/@([\p{L}_.-]+(?:\s+[\p{L}_.-]+)*)/gu; const set=new Set(); let m; while((m=r.exec(t))) set.add(m[1].trim()); return [...set]; }
-function extrairPassos(t){ const linhas=t.split(/\n|•|\u2022|\-/).map(s=>s.trim()).filter(Boolean); return [...new Set(linhas.filter(l=>KW_PASSOS.some(k=>l.toLowerCase().startsWith(k)||l.toLowerCase().includes(` ${k} `))))].slice(0,12); }
+function extrairPassos(t){ const linhas=t.split(/\n|•|\u2022|-/).map(s=>s.trim()).filter(Boolean); return [...new Set(linhas.filter(l=>KW_PASSOS.some(k=>l.toLowerCase().startsWith(k)||l.toLowerCase().includes(` ${k} `))))].slice(0,12); }
 function resumoCurto(t){ const ls=t.split(/\n/).map(s=>s.trim()).filter(Boolean); const fortes=ls.filter(l=>/(entrega|prazo|confirm|aprova|grava|bloque|pendente|datas?)/i.test(l)); return (fortes.length?fortes:ls).slice(0,5).join("\n"); }
-function parseCaptura(t){ return { resumo:resumoCurto(t), proximosPassos:extrairPassos(t), timeline:extrairDatas(t), responsaveis:extrairResp(t), tags:extrairTags(t) }; }
+function parseTexto(t){ return { resumo:resumoCurto(t), proximosPassos:extrairPassos(t), timeline:extrairDatas(t), responsaveis:extrairResp(t), tags:extrairTags(t) }; }
 
+// ====== componente ======
 export default function Page(){
   const [projetos, setProjetos] = useState([]);
   const [cat, setCat] = useState(CATEGORIAS[0]);
@@ -85,6 +85,7 @@ export default function Page(){
 
   // modais
   const [editing, setEditing] = useState(null);
+
   const [showCapture, setShowCapture] = useState(false);
   const [captureText, setCaptureText] = useState("");
   const [captureTarget, setCaptureTarget] = useState("");
@@ -93,6 +94,15 @@ export default function Page(){
   const [briefProject, setBriefProject] = useState(null);
 
   const [showGeneral, setShowGeneral] = useState(false);
+
+  // NOVO: modal de Reunião/Email/Nota
+  const [showHist, setShowHist] = useState(false);
+  const [histTarget, setHistTarget] = useState("");
+  const [histTipo, setHistTipo] = useState("reunião");
+  const [histData, setHistData] = useState(hojeISO());
+  const [histResumo, setHistResumo] = useState("");
+  const [histConteudo, setHistConteudo] = useState("");
+  const [histAutoIntegrar, setHistAutoIntegrar] = useState(true);
 
   useEffect(()=>{
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -125,12 +135,13 @@ export default function Page(){
   }
   function apagar(id){ if (!confirm("Apagar este projeto?")) return; setProjetos(prev=>prev.filter(p=>p.id!==id)); }
 
+  // CAPTURA (continua como estava)
   function abrirCaptura(p=null){
     setCaptureText(""); setCaptureTarget(p?.id || ""); setShowCapture(true);
   }
   function analisar(){
     if (!captureText.trim()) return;
-    const parsed = parseCaptura(captureText);
+    const parsed = parseTexto(captureText);
     setCaptureText(JSON.stringify(parsed, null, 2) + "\n\n" + captureText);
   }
   function aplicarCaptura(){
@@ -145,21 +156,51 @@ export default function Page(){
       const novo = { ...p };
       novo.proximosPassos = setUniq([...(p.proximosPassos||[]), ...(parsed.proximosPassos||[])]);
       novo.responsaveis = setUniq([...(p.responsaveis||[]), ...(parsed.responsaveis||[])]);
-      novo.tags = setUniq([...(p.tags||[]), ...(parsed.tags||[])]);
+      novo.tags = setUniq([...(p.tags||[]), ...(parsed.tags||[])]); 
       novo.timeline = [ ...(p.timeline||[]), ...(parsed.timeline||[]) ];
-      const carimbo = `\n\n[${new Date().toLocaleString()}] Resumo da captura:\n${parsed.resumo}`;
-      novo.notas = (p.notas||"") + carimbo;
+      novo.notas = (p.notas||"") + `\n\n[${new Date().toLocaleString()}] Resumo da captura:\n${parsed.resumo}`;
       novo.historico = [ ...(p.historico||[]), { id: uid(), data: new Date().toISOString(), origem: "captura", conteudo: parts.slice(1).join("\n\n"), resumo: parsed.resumo } ];
       return novo;
     }));
     setShowCapture(false);
   }
 
+  // NOVO: REUNIÃO/EMAIL
+  function abrirHistorico(p=null){
+    setHistTarget(p?.id || ""); setHistTipo("reunião"); setHistData(hojeISO());
+    setHistResumo(""); setHistConteudo(""); setHistAutoIntegrar(true);
+    setShowHist(true);
+  }
+  function guardarHistorico(){
+    const alvo = histTarget || (projetos[0]?.id || "");
+    if (!alvo) { alert("Escolhe um projeto"); return; }
+    const texto = histConteudo || histResumo;
+    const parsed = histAutoIntegrar ? parseTexto(texto) : null;
+
+    setProjetos(prev => prev.map(p=>{
+      if (p.id !== alvo) return p;
+      const novo = { ...p };
+      // 1) guardar entrada
+      novo.historico = [ ...(p.historico||[]), { id: uid(), data: new Date(histData).toISOString(), origem: histTipo, resumo: histResumo, conteudo: histConteudo } ];
+      // 2) integrar automaticamente (opcional)
+      if (parsed){
+        const setUniq = arr => Array.from(new Set((arr||[]).filter(Boolean)));
+        novo.proximosPassos = setUniq([...(p.proximosPassos||[]), ...(parsed.proximosPassos||[])]);
+        novo.responsaveis   = setUniq([...(p.responsaveis||[]), ...(parsed.responsaveis||[])]);
+        novo.tags           = setUniq([...(p.tags||[]), ...(parsed.tags||[])]);
+        novo.timeline       = [ ...(p.timeline||[]), ...(parsed.timeline||[]) ];
+        novo.notas = (p.notas||"") + `\n\n[${new Date().toLocaleString()}] Resumo (${histTipo}):\n${parsed.resumo}`;
+      }
+      return novo;
+    }));
+    setShowHist(false);
+  }
+
   function mdProjeto(p){
     const atras = detectarAtrasos(p);
     const divs = detectarDivergencias(p);
     const linhas = (p.timeline||[]).slice().sort((a,b)=>(a.data||"").localeCompare(b.data||"")).map(t=>`- [${t.status}] ${t.etiqueta||"Sem etiqueta"} em ${fmt(t.data)}`).join("\n");
-    const ult = (p.historico||[]).slice(-3).reverse().map(h=>`- ${new Date(h.data).toLocaleString()} • ${h.origem}`).join("\n");
+    const ult = (p.historico||[]).slice(-3).reverse().map(h=>`- ${new Date(h.data).toLocaleString()} • ${h.origem} • ${h.resumo || "(sem resumo)"}`).join("\n");
     const riscos = [];
     if (divs.length) riscos.push(`Divergências: ${divs.join(", ")}`);
     if (atras.length) riscos.push(`Atrasos: ${atras.map(a=>a.etiqueta+" "+fmt(a.data)).join(", ")}`);
@@ -259,17 +300,20 @@ ${atrasos.map(({p,t})=>`- ${fmt(t.data)} • ${p.titulo} • ${t.etiqueta}`).joi
               {filtrados.filter(p=>p.categoria===cat && p.estado===est).map(p => {
                 const divs = detectarDivergencias(p);
                 const atras = detectarAtrasos(p);
+                const ult3 = (p.historico||[]).slice(-3).reverse();
                 return (
                   <div className="card" key={p.id}>
                     <div className="flex" style={{justifyContent:"space-between"}}>
                       <strong>{p.titulo}</strong>
                       <div className="flex">
                         <button className="btn" onClick={()=>setEditing({...p})}>Editar</button>
+                        <button className="btn" onClick={()=>abrirHistorico(p)}>Reunião/Email</button>
                         <button className="btn" onClick={()=>abrirCaptura(p)}>Capturar</button>
                         <button className="btn" onClick={()=>{ setBriefProject(p); setShowBrief(true); }}>Brief</button>
                         <button className="btn" onClick={()=>apagar(p.id)}>Apagar</button>
                       </div>
                     </div>
+
                     <div className="badges">
                       <span className="badge">{p.categoria}</span>
                       <span className="badge">{p.estado}</span>
@@ -279,120 +323,7 @@ ${atrasos.map(({p,t})=>`- ${fmt(t.data)} • ${p.titulo} • ${t.etiqueta}`).joi
                       {divs.length>0 && <span className="badge warn">Divergência</span>}
                       {atras.length>0 && <span className="badge warn">Atraso</span>}
                     </div>
+
                     {p.notas && <div className="muted" style={{whiteSpace:"pre-wrap"}}>{p.notas}</div>}
-                    <div className="muted">
-                      <strong>Responsáveis:</strong> {(p.responsaveis||[]).join(", ") || "n/d"}
-                    </div>
-                    {(p.proximosPassos||[]).length>0 && (
-                      <div className="muted"><strong>Próximos passos:</strong> {p.proximosPassos.join(" · ")}</div>
-                    )}
-                    {(p.timeline||[]).length>0 && (
-                      <div className="timeline">
-                        {(p.timeline||[]).map(t => (
-                          <div key={t.id} className="flex">
-                            <span className="badge">{t.etiqueta || "Sem etiqueta"}</span>
-                            <span>{fmt(t.data)}</span>
-                            <span className="badge">{t.status}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Editor modal */}
-      {editing && (
-        <div className="modalBg" onClick={(e)=>{ if(e.target===e.currentTarget) setEditing(null); }}>
-          <div className="modal">
-            <h3>{projetos.some(p=>p.id===editing.id) ? "Editar projeto" : "Novo projeto"}</h3>
-            <div className="grid">
-              <input className="input" placeholder="Título" value={editing.titulo} onChange={e=>setEditing({...editing, titulo:e.target.value})} />
-              <div className="row2">
-                <select className="select" value={editing.categoria} onChange={e=>setEditing({...editing, categoria:e.target.value})}>
-                  {CATEGORIAS.map(c=><option key={c} value={c}>{c}</option>)}
-                </select>
-                <select className="select" value={editing.estado} onChange={e=>setEditing({...editing, estado:e.target.value})}>
-                  {ESTADOS.map(s=><option key={s} value={s}>{s}</option>)}
-                </select>
-              </div>
-              <input className="input" placeholder="Responsáveis separados por vírgulas" value={(editing.responsaveis||[]).join(", ")} onChange={e=>setEditing({...editing, responsaveis:e.target.value.split(",").map(x=>x.trim()).filter(Boolean)})} />
-              <input className="input" placeholder="Tags separadas por vírgulas" value={(editing.tags||[]).join(", ")} onChange={e=>setEditing({...editing, tags:e.target.value.split(",").map(x=>x.trim()).filter(Boolean)})} />
-              <textarea className="textarea" rows={4} placeholder="Próximos passos, um por linha" value={(editing.proximosPassos||[]).join("\n")} onChange={e=>setEditing({...editing, proximosPassos:e.target.value.split("\n").map(x=>x.trim()).filter(Boolean)})} />
-              <textarea className="textarea" rows={5} placeholder="Notas" value={editing.notas} onChange={e=>setEditing({...editing, notas:e.target.value})} />
-              <div className="flex" style={{justifyContent:"flex-end"}}>
-                <button className="btn" onClick={()=>setEditing(null)}>Fechar</button>
-                <button className="btn primary" onClick={gravar}>Gravar</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Captura modal */}
-      {showCapture && (
-        <div className="modalBg" onClick={(e)=>{ if(e.target===e.currentTarget) setShowCapture(false); }}>
-          <div className="modal">
-            <h3>Capturar informação para projeto</h3>
-            <div className="grid">
-              <select className="select" value={captureTarget} onChange={e=>setCaptureTarget(e.target.value)}>
-                <option value="">Escolhe o projeto</option>
-                {projetos.map(p=> <option key={p.id} value={p.id}>{p.titulo}</option>)}
-              </select>
-              <textarea className="textarea" rows={10} placeholder="Cola aqui emails, notas de reunião ou texto livre" value={captureText} onChange={e=>setCaptureText(e.target.value)} />
-              <div className="flex" style={{justifyContent:"space-between"}}>
-                <div className="flex">
-                  <button className="btn" onClick={analisar}>Analisar</button>
-                  <button className="btn" onClick={aplicarCaptura}>Aplicar</button>
-                </div>
-                <button className="btn" onClick={()=>setShowCapture(false)}>Fechar</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Brief de projeto */}
-      {showBrief && (
-        <div className="modalBg" onClick={(e)=>{ if(e.target===e.currentTarget) setShowBrief(false); }}>
-          <div className="modal">
-            <h3>Briefing do projeto</h3>
-            <div className="grid">
-              <textarea className="textarea" rows={18} value={briefProject ? mdProjeto(briefProject) : ""} readOnly />
-              <div className="flex" style={{justifyContent:"space-between"}}>
-                <button className="btn" onClick={()=>download(briefProject.titulo.replace(/\s+/g,"_")+".md", mdProjeto(briefProject))}>Descarregar .md</button>
-                <button className="btn" onClick={()=>{ navigator.clipboard.writeText(mdProjeto(briefProject)).catch(()=>{}); }}>Copiar</button>
-                <button className="btn" onClick={()=>setShowBrief(false)}>Fechar</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Ponto de situação geral */}
-      {showGeneral && (
-        <div className="modalBg" onClick={(e)=>{ if(e.target===e.currentTarget) setShowGeneral(false); }}>
-          <div className="modal">
-            <h3>Ponto de Situação Geral</h3>
-            <div className="grid">
-              <textarea className="textarea" rows={18} value={mdGeral()} readOnly />
-              <div className="flex" style={{justifyContent:"space-between"}}>
-                <button className="btn" onClick={()=>download("ponto_de_situacao.md", mdGeral())}>Descarregar .md</button>
-                <button className="btn" onClick={()=>{ navigator.clipboard.writeText(mdGeral()).catch(()=>{}); }}>Copiar</button>
-                <button className="btn" onClick={()=>setShowGeneral(false)}>Fechar</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div className="footer">
-        Dados guardados localmente no navegador. Exporta o Markdown antes das reuniões.
-      </div>
-    </div>
-  );
-}
+                    <div className="muted"><strong>Responsáveis:</strong> {(p.responsaveis||[]).join(", ") || "n/d"}</div>
+                    {(p.proximosP
